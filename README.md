@@ -36,4 +36,4 @@ python3.12 build.py build --stock-os "$HOME/Downloads/os.ldr" --out "$HOME/Downl
 
 The standalone firmware includes KILN as its sole custom machine. Use TE Builder for a collection containing your other machines. The release includes the SDK source and both patches. [Build options, offline setup and output files](docs/BUILD.md)
 
-**Release 0.2.5** passed on OP-XY hardware, including the rider response at quiet send levels. [Release notes](docs/RELEASE.md) · [MIT license](LICENSE)
+**Release 0.2.5** passed on OP-XY hardware, including the rider response at quiet send levels. [Release notes](docs/RELEASE.md) · [GPL-3.0](LICENSE)
