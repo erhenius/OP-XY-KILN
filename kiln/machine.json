@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "sdk": "1.16",
+  "kind": "effect",
+  "dryLevel": 0,
+  "description": "Eight-mode stereo send processor with independent warmth and a programmable stereo gate.",
+  "graphics": {
+    "grayscale": "panel.grayscale.svg.fragment"
+  }
+}

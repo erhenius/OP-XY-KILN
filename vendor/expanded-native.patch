@@ -1,0 +1,99 @@
+--- a/linker/opxy-1.2.1.ld
++++ b/linker/opxy-1.2.1.ld
+@@ -1,9 +1,9 @@
+-/* Module layout for stock OP-XY 1.2.1: the 2 MiB tail of the application
+- * heap, [0x8d2d0380, 0x8d4d0380). Its last 16 KiB hold the relocated stock
++/* Module layout for stock OP-XY 1.2.1: the 4 MiB tail of the application
++ * heap, [0x8d0d0380, 0x8d4d0380). Its last 16 KiB hold the relocated stock
+  * effect records, engine records and screen slots (tooling/stock_tables.py). */
+ OUTPUT_ARCH(bfin)
+ ENTRY(extensions_synth_exit)
+-MEMORY { MODULE (rwx) : ORIGIN = 0x8d2d0380, LENGTH = 0x1fc000 }
++MEMORY { MODULE (rwx) : ORIGIN = 0x8d0d0380, LENGTH = 0x3fc000 }
+ SECTIONS {
+   __extensions_reserved_start = ORIGIN(MODULE);
+   __extensions_reserved_end = ORIGIN(MODULE) + LENGTH(MODULE);
+--- a/tooling/pipeline.py
++++ b/tooling/pipeline.py
+@@ -120,6 +120,11 @@
+     require(sha(data) == reviewed_profile_sha256(), 'Reviewed firmware profile changed')
+     profile = json.loads(data)
+     require(profile['schema'] == 1 and profile['id'] == 'opxy-1.2.1', 'Incompatible profile')
++    # This checkout is prepared exclusively for the Manager's expanded native build.
++    from tools.check_browser_firmware import expanded_profile
++    profile = expanded_profile(profile)
++    require(profile['reserved_bytes'] == 4 * 1024 * 1024, 'Expected the reviewed 4 MiB profile')
++    profile['linker_sha256'] = 'a5d1bbd878389f1b146b578de77467b5804265fd4c09620d6963a5e43d083034'
+     check_patch_boundaries(profile, len(profile['patches']))
+     return profile
+ 
+--- a/tooling/native.py
++++ b/tooling/native.py
+@@ -486,8 +486,19 @@
+         if not overflow and 'Module overlaps the relocated tables' not in (error.output or ''):
+             raise
+         usage, limit = memory_by_owner(directory, chosen, profile, runtime_members), module_bytes(profile)
+-        total = limit + int(overflow.group(1)) if overflow else sum(sum(share.values()) for share in usage.values())
+-        return memory_summary(usage, total, limit)
++        if overflow:
++            total = limit + int(overflow.group(1))
++        else:
++            # An ASSERT-only failure still has a GNU link map including alignment.
++            map_path = Path(directory) / (name + '.map')
++            link_map = map_path.read_text() if map_path.is_file() else ''
++            end = re.search(r'^\s*(0x[0-9a-fA-F]+)\s+__extensions_module_end\s*=', link_map, re.M)
++            if end is None:
++                raise ValueError('Selection exceeds module capacity; linker did not report its size') from error
++            total = int(end.group(1),16) - profile['module_base']
++            require(total > limit, 'Linker overflow and module map disagree')
++        return (f'{total:,} bytes required, {total-limit:,} bytes over capacity. '
++                + memory_summary(usage, total, limit))
+     return None
+ 
+ 
+@@ -500,21 +500,6 @@
+     overflow = link(directory, tools, profile, definitions, machines, machines, runtime_members=runtime_members)
+     if overflow is None:
+         return machines
+-    core = [m for m in machines if m.id in OFFICIAL]
+-    require(core and (len(core) < len(machines) or extensions_of(machines)),
+-            'Machines exceed the shared module memory, ' + overflow)
+-    for m in machines:
+-        if m not in core:
+-            beside = link(directory, tools, profile, definitions, machines,
+-                          [x for x in machines if x in core or x is m], 'fit', runtime_members, ())
+-            require(beside is None, f'{m.id} does not fit beside the official machines, ' + str(beside))
+-    for e in extensions_of(machines):
+-        beside = link(directory, tools, profile, definitions, machines, core, 'fit', runtime_members, (e,))
+-        require(beside is None, f'The {e.id} extension does not fit beside the official machines, ' + str(beside))
+-    for leftover in ('fit.elf', 'fit.map'):
+-        (directory / leftover).unlink(missing_ok=True)
+-    overflow = link(directory, tools, profile, definitions, machines, core, runtime_members=runtime_members)
+-    require(overflow is None, 'The official machines and the extensions exceed the shared module memory, ' + str(overflow))
+-    return subset(machines, core)
++    raise ValueError('Selected machines exceed the 4 MiB reservation: ' + overflow)
+ 
+ 
+@@ -1256,7 +1241,8 @@
+                                              **({'benchmark_sweep': True} if sweep else {}),
+                                              **({'layout': layout} if layout else {}),
+                                              files={name: sha(read(output / name)) for name in tracked}))
+-    save_json(output / 'layout.json', layout_document(numbers_after(layout, machines)))
++    save_json(output / 'layout.json', dict(layout_document(numbers_after(layout, machines)),
++                                         memory='expanded', reserved_bytes=profile['reserved_bytes']))
+     result = verification(stock, catalog, output, toolchain, compiler, require_record=False)
+     save_json(output / 'verification.json', result)
+     return output, result
+--- a/tooling/machines.py
++++ b/tooling/machines.py
+@@ -739,8 +739,8 @@
+             (value.get('memory') == 'expanded' and reserved is not None and reserved.is_integer() and
+              reserved > 0 and reserved % (1024 * 1024) == 0),
+             f'{path} has an invalid memory choice')
+-    require(not build or 'memory' not in value, f"{path} is from a build with the builder's experimental memory; "
+-            'sdk.py builds use standard memory. Remove "memory" and "reserved_bytes" from a copy to build with standard memory.')
++    require(not build or (value.get('memory') == 'expanded' and reserved == profile['reserved_bytes']),
++            'Expanded native build requires a matching expanded layout')
+     return check_layout_numbers(value['machines'], 'the layout')
+ 
+ 

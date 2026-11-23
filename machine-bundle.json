@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "name": "KILN",
+  "id": "kiln",
+  "mode": "combined",
+  "sdkCommit": "ca122f4062f08f13a3023904620a4c35ff9b4a45",
+  "machine": "kiln",
+  "claims": [
+    "telemetry:18",
+    "telemetry:19"
+  ],
+  "patches": [
+    {
+      "path": "integration/return-meter.patch",
+      "sha256": "db92ab81d308e97511d1cbe225076cfcb5eb2a79ec5d1d0f3bd1de42450a3269"
+    }
+  ]
+}

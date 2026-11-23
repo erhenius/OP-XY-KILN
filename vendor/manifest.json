@@ -1,0 +1,10 @@
+{
+  "upstream": "https://github.com/etcetc000/open-xy",
+  "commit": "ca122f4062f08f13a3023904620a4c35ff9b4a45",
+  "sdk": "open-xy-1.17-kiln.zip",
+  "sha256": "d27ccc0c98bb0aea57d2b7baa2199d516887912158e61bf9089cb8d9b5be09fa",
+  "patches": {
+    "integration/return-meter.patch": "db92ab81d308e97511d1cbe225076cfcb5eb2a79ec5d1d0f3bd1de42450a3269",
+    "vendor/expanded-native.patch": "242cac2fc716c300a5d8c2dd7050ca01e4bdcf6f397ff1a886985684db270ad1"
+  }
+}

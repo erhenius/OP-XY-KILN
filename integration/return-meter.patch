@@ -1,0 +1,101 @@
+diff --git a/sdk/platform/opxy-1.2.1/fx_object.cpp.in b/sdk/platform/opxy-1.2.1/fx_object.cpp.in
+index 7516e1954fc0a544b7d6ac8dad20ea04d9dec033..fcc1e7ee7c7e5302f6bf49a7e2ba60c56f63a419 100644
+--- a/sdk/platform/opxy-1.2.1/fx_object.cpp.in
++++ b/sdk/platform/opxy-1.2.1/fx_object.cpp.in
+@@ -5,6 +5,7 @@
+ // fx.cpp includes its own core.h, resolved next to it rather than on the
+ // shared include path where another machine's core.h may come first.
+ #include "fx.cpp"
++#include "return_meter.hpp"
+ extern "C" {
+ void* @PREFIX@_fx_factory(void*) __asm__("@PREFIX@_fx_factory");
+ const char* @PREFIX@_fx_parameter_name(opxy::u32) __asm__("@PREFIX@_fx_parameter_name");
+@@ -27,12 +28,14 @@ static void init(void* self, opxy::u32 slot) {
+     Object* object = static_cast<Object*>(self);
+ @INIT@
+     @NAMESPACE@::initialize(object->state);
++    opxy::platform::return_meter::reset(object,slot,0);
+ }
+ // +0x10: one 64-sample block, left and right processed in place.
+ static void process(void* self, opxy::i32* left, opxy::i32* right, const opxy::i32* parameters) {
+     Object* object = static_cast<Object*>(self);
+ @BUS_RAISE@@SHIFT_PRELUDE@
+-    @NAMESPACE@::process(object->state, @BUFFER@@TRANSPORT@left, right, @PARAMETERS@);@BUS_LOWER@
++    @NAMESPACE@::process(object->state, @BUFFER@@TRANSPORT@left, right, @PARAMETERS@);
++    opxy::platform::return_meter::publish(object,left,right,0);@BUS_LOWER@
+ }
+ void* @PREFIX@_fx_factory(void* storage) {
+     if (!storage) return nullptr;
+diff --git a/sdk/platform/opxy-1.2.1/return_meter.hpp b/sdk/platform/opxy-1.2.1/return_meter.hpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..b3c43f7b2c917494f6fb16bee18700477f76f9c7
+--- /dev/null
++++ b/sdk/platform/opxy-1.2.1/return_meter.hpp
+@@ -0,0 +1,47 @@
++// Optional return telemetry for native send effects, OS 1.2.1.
++// The two processors exchange selected-track meter words via stock telemetry.
++#pragma once
++#include "stock.hpp"
++namespace opxy { namespace platform { namespace return_meter {
++struct Window { u32 peak, blocks, serial, last; };
++// Only the opted-in adapter instantiates storage. Mode changes may reset the
++// DSP state; the per-send peak window spans those changes until the next report.
++template<class O> static inline Window& window_for(u32 slot) {
++    static Window windows[2];
++    return windows[slot-14];
++}
++static inline bool send_track(u32 t) { return t == 14 || t == 15; }
++static inline void write_level(u32 track, u32 value) {
++    stock<u32(u32,u32)>(0x8d4d666a)(track + 4, value);
++}
++static inline u32 magnitude(i32 x) {
++    // One's complement of negatives is within one Q31 LSB of abs(INT_MIN).
++    return static_cast<u32>(x < 0 ? ~x : x);
++}
++template<class O> static inline auto reset(O* o, u32 track, int)
++    -> typename decltype(o->state)::ReturnMeterEnabled {
++    if (send_track(track)) {window_for<O>(track)={};write_level(track,0);}
++}
++template<class O> static inline void reset(O*,u32,...) {}
++template<class O> static inline auto publish(O* o,const i32* l,const i32* r,int)
++    -> typename decltype(o->state)::ReturnMeterEnabled {
++    if (!send_track(o->slot)) return;
++    auto& w = window_for<O>(o->slot);
++    for (unsigned j=3; j<64; j+=16) {
++        const u32 a=magnitude(l[j]), b=magnitude(r[j]);
++        if(a>w.peak) w.peak=a;
++        if(b>w.peak) w.peak=b;
++    }
++    if (++w.blocks < 34) return;
++    // Low bits carry freshness even for steady levels. Publish zero once at rest.
++    const u32 value=(w.peak >> 8) ? ((w.peak & 0x7fffff00u) | (++w.serial & 255u)) : 0;
++    if(value!=w.last) { write_level(o->slot,value); w.last=value; }
++    w.blocks=0; w.peak=0;
++}
++template<class O> static inline void publish(O*,const i32*,const i32*,...) {}
++template<class S> static inline auto receive(S& s,u32 track,int)
++    -> decltype(s.accept_return_meter(u32()),void()) {
++    s.accept_return_meter(send_track(track) ? word(0x080376e4u + 4*(track+4)) : 0);
++}
++template<class S> static inline void receive(S&,u32,...) {}
++} } }
+diff --git a/sdk/platform/opxy-1.2.1/screen_drawing.hpp b/sdk/platform/opxy-1.2.1/screen_drawing.hpp
+index 5318eb7caf60ea2d837f8ec8317e1ad325163ff1..0d741779975d9a471506c676d290dbda247b521f 100644
+--- a/sdk/platform/opxy-1.2.1/screen_drawing.hpp
++++ b/sdk/platform/opxy-1.2.1/screen_drawing.hpp
+@@ -8,6 +8,7 @@
+ #include "note_activity.hpp"
+ #include "amp_envelope.hpp"
+ #include "drum_send.hpp"
++#include "return_meter.hpp"
+ 
+ extern "C" opxy::u32 sdk_screen_activation(opxy::u32, opxy::u32) __asm__("sdk_screen_activation");
+ // Refreshes opxy_sample_overview for a sample engine's own screen (sample_overview.cpp).
+@@ -109,6 +110,7 @@ template <class Machine> struct Drawing {
+         if (Machine::sample) sdk_sample_overview_update(controls.track);
+         platform::amp_envelope(controls.track, display_input.amp);
+         display_input.reduced_motion = 0;
++        platform::return_meter::receive(display_state, controls.track, 0);
+         binding::display_render(&display_state, &display_input, &display_frame);
+         if (!binding::display_valid(&display_frame)) return;
+         Renderer::apply(o,display_frame);
